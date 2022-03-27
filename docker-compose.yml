@@ -1,0 +1,82 @@
+version: "1"
+services:
+    elasticsearch:
+        image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
+        container_name: elasticsearch01
+        environment:
+            - discovery.type=single-node
+            - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+        ports:
+            - 9200:9200
+        volumes:
+            - data01:/usr/share/elasticsearch/data
+        networks:
+            - elknetwork
+    kibana:
+        image: docker.elastic.co/kibana/kibana:${STACK_VERSION}
+        container_name: kibana
+        ports:
+            - 5601:5601
+        environment:
+          ELASTICSEARCH_URL: http://elasticsearch01:9200
+          ELASTICSEARCH_HOSTS: '["http://elasticsearch01:9200"]'
+        depends_on:
+          - elasticsearch01
+        networks:
+          - elknetwork
+    logstash:
+        image: docker.elastic.co/logstash/logstash:${STACK_VERSION}
+        container_name: logstash
+        hostname: logstash
+        ports:
+            - "5044:5044"
+            - "5000:5000/tcp"
+            - "5000:5000/udp"
+            - "9600:9600"
+        volumes:
+          - ./logstash:/usr/share/logstash/pipeline/
+        depends_on:
+          - elasticsearch01
+        networks:
+          - elknetwork
+    filebeat:
+        image: docker.elastic.co/beats/filebeat:${STACK_VERSION}
+        container_name: filebeat
+        # Run as 'root' instead of 'filebeat' (uid 1000) to allow reading
+        # 'docker.sock' and the host's filesystem.
+        restart: always
+        user: root
+        command:
+            # Log to stderr.
+            - -e
+            # Disable config file permissions checks. Allows mounting
+            # 'config/filebeat.yml' even if it's not owned by root.
+            # see: https://www.elastic.co/guide/en/beats/libbeat/current/config-file-permissions.html
+            - --strict.perms=false
+        configs:
+            - source: fb_config
+              target: /usr/share/filebeat/filebeat.yml
+        volumes:
+            - filebeat:/usr/share/filebeat/data
+            - /var/run/docker.sock:/var/run/docker.sock
+            # This is needed for filebeat to load container log path as specified in filebeat.yml
+            - /var/lib/docker/containers/:/var/lib/docker/containers/:ro
+
+            # This is needed for filebeat to load logs for system and auth modules
+            - /var/log/:/var/log/:ro
+        depends_on:
+          - kibana
+          - logstash
+        networks:
+          - elknetwork
+volumes:
+  data01:
+    driver: local
+  filebeat:
+    
+configs:
+  fb_config:
+    file: $PWD/filebeat/config/filebeat.yml
+networks:
+    elknetwork:
+        driver: bridge
